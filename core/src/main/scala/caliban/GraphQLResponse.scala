@@ -2,6 +2,8 @@ package caliban
 
 import caliban.ResponseValue.ObjectValue
 import caliban.interop.circe._
+import caliban.interop.play._
+import caliban.interop.zio.IsZIOJsonEncoder
 
 /**
  * Represents the result of a GraphQL query, containing a data object and a list of errors.
@@ -9,32 +11,10 @@ import caliban.interop.circe._
 case class GraphQLResponse[+E](data: ResponseValue, errors: List[E], extensions: Option[ObjectValue] = None)
 
 object GraphQLResponse {
-  implicit def circeEncoder[F[_]: IsCirceEncoder, E]: F[GraphQLResponse[E]] =
-    GraphQLResponseCirce.graphQLResponseEncoder.asInstanceOf[F[GraphQLResponse[E]]]
-}
-
-private object GraphQLResponseCirce {
-  import io.circe._
-  import io.circe.syntax._
-  val graphQLResponseEncoder: Encoder[GraphQLResponse[Any]] = Encoder
-    .instance[GraphQLResponse[Any]] {
-      case GraphQLResponse(data, Nil, None) => Json.obj("data" -> data.asJson)
-      case GraphQLResponse(data, Nil, Some(extensions)) =>
-        Json.obj("data" -> data.asJson, "extensions" -> extensions.asInstanceOf[ResponseValue].asJson)
-      case GraphQLResponse(data, errors, None) =>
-        Json.obj("data" -> data.asJson, "errors" -> Json.fromValues(errors.map(handleError)))
-      case GraphQLResponse(data, errors, Some(extensions)) =>
-        Json.obj(
-          "data"       -> data.asJson,
-          "errors"     -> Json.fromValues(errors.map(handleError)),
-          "extensions" -> extensions.asInstanceOf[ResponseValue].asJson
-        )
-    }
-
-  private def handleError(err: Any): Json =
-    err match {
-      case ce: CalibanError => ce.asJson
-      case _                => Json.obj("message" -> Json.fromString(err.toString))
-    }
-
+  implicit def circeEncoder[F[_]: IsCirceEncoder, E]: F[GraphQLResponse[E]]     =
+    caliban.interop.circe.json.GraphQLResponseCirce.graphQLResponseEncoder.asInstanceOf[F[GraphQLResponse[E]]]
+  implicit def playJsonWrites[F[_]: IsPlayJsonWrites, E]: F[GraphQLResponse[E]] =
+    caliban.interop.play.json.GraphQLResponsePlayJson.graphQLResponseWrites.asInstanceOf[F[GraphQLResponse[E]]]
+  implicit def zioJsonEncoder[F[_]: IsZIOJsonEncoder, E]: F[GraphQLResponse[E]] =
+    caliban.interop.zio.GraphQLResponseZioJson.graphQLResponseEncoder.asInstanceOf[F[GraphQLResponse[E]]]
 }

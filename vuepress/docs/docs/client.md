@@ -3,7 +3,7 @@
 **Caliban-client** is a module independent from Caliban that makes it possible to write GraphQL queries using Scala code in a type-safe and functional fashion. It is built on top of [sttp](https://github.com/softwaremill/sttp), which means you can run requests using the backend of your choice.
 
 Just like Caliban, `caliban-client` offers a purely functional interface and keeps the boilerplate minimal. It works as follows:
-1. Use the `caliban-codegen` tool to generate boilerplate code from a given GraphQL schema
+1. Use the `caliban-codegen-sbt` tool to generate boilerplate code from a given GraphQL schema
 2. Write your GraphQL query/mutation by combining helpers from the generated code
 3. Transform your query/mutation into an `sttp` request and run it with your preferred backend
 
@@ -12,28 +12,45 @@ Just like Caliban, `caliban-client` offers a purely functional interface and kee
 To use `caliban-client`, add the following line in your `build.sbt` file:
 
 ```
-libraryDependencies += "com.github.ghostdogpr" %% "caliban-client" % "0.6.0"
+libraryDependencies += "com.github.ghostdogpr" %% "caliban-client" % "0.9.5"
 ```
 
-Caliban-client is available for ScalaJS.
+Caliban-client is available for ScalaJS. To use it in a ScalaJS project, instead add this line to your `build.sbt` file:
+
+```
+libraryDependencies += "com.github.ghostdogpr" %%% "caliban-client" % "0.9.5"
+```
 
 ## Code generation
 
 The first step for building GraphQL queries with `caliban-client` is to generate boilerplate code from a GraphQL schema. For that, you need a file containing your schema (if your backend uses `caliban`, you can get it by calling `GraphQL#render` on your API).
 
-To use this feature, add the `caliban-codegen` sbt plugin to your project and enable it. 
- 
+To use this feature, add the `caliban-codegen-sbt` sbt plugin to your `project/plugins.sbt` file:
 ```scala
-addSbtPlugin("com.github.ghostdogpr" % "caliban-codegen" % "0.6.0")
+addSbtPlugin("com.github.ghostdogpr" % "caliban-codegen-sbt" % "0.9.5")
+```
+
+And enable it in your `build.sbt` file:
+```scala
 enablePlugins(CodegenPlugin)
 ```
+
 Then call the `calibanGenClient` sbt command.
 ```scala
-calibanGenClient schemaPath outPath ?scalafmtPath
+calibanGenClient schemaPath outputPath [--scalafmtPath path] [--headers name:value,name2:value2] [--genView true|false] [--scalarMappings gqlType:f.q.d.n.Type,gqlType2:f.q.d.n.Type2] [--imports a.b.c._,c.d.E]
 
-calibanGenClient project/schema.graphql src/main/Client.scala
+calibanGenClient project/schema.graphql src/main/client/Client.scala --genView true  
 ```
-This command will generate a Scala file in `outputPath` containing helper functions for all the types defined in the provided GraphQL schema defined at `schemaPath`. The generated code will be formatted with Scalafmt using the configuration defined by `scalafmtPath` (default: `.scalafmt.conf`).
+This command will generate a Scala file in `outputPath` containing helper functions for all the types defined in the provided GraphQL schema defined at `schemaPath`.
+Instead of a file, you can provide a URL and the schema will be obtained using introspection.
+The generated code will be formatted with Scalafmt using the configuration defined by `--scalafmtPath` option (default: `.scalafmt.conf`).
+If you provide a URL for `schemaPath`, you can provide request headers with `--headers` option.
+The package of the generated code is derived from the folder of `outputPath`.
+This can be overridden by providing an alternative package with the `--packageName`
+option.
+Provide `--genView true` option if you want to generate a view for the GraphQL types. 
+If you want to force a mapping between a GraphQL type and a Scala class (such as scalars), you can use the
+`--scalarMappings` option. Also you can add imports for example for your ArgEncoder implicits by providing `--imports` option.
 
 ## Query building
 
@@ -86,7 +103,7 @@ type Query {
 When calling `characters`, we need to provide a `SelectionBuilder[Character, ?]` to indicate which fields to select on the returned `Character`.
 
 ```scala
-val query: SelectionBuilder[RootQuery, List[CharacterView]] = 
+val query: SelectionBuilder[RootQuery, List[CharacterView]] =
   Query.characters {
     (Character.name ~ Character.nicknames ~ Character.origin)
       .mapN(CharacterView)
@@ -95,7 +112,7 @@ val query: SelectionBuilder[RootQuery, List[CharacterView]] =
 
 Or if we reuse the `character` selection we just created:
 ```scala
-val query: SelectionBuilder[RootQuery, List[CharacterView]] = 
+val query: SelectionBuilder[RootQuery, List[CharacterView]] =
   Query.characters {
     character
   }
@@ -114,10 +131,76 @@ type Query {
 You now need to provide an `Origin` when calling `characters`:
 
 ```scala
-val query: SelectionBuilder[RootQuery, List[CharacterView]] = 
+val query: SelectionBuilder[RootQuery, List[CharacterView]] =
   Query.characters(Origin.MARS) {
     character
   }
+```
+
+## Automated generation of a view projection
+
+`ClientWriter` can generate a view projection for a GraphQL type. 
+
+For example, given the following schema:
+```graphql
+type Origin {
+  description: String
+  details: String  
+}
+
+type Character {
+  name: String!
+  nicknames: [String!]!
+  origin(filter: String): Origin!
+}
+```
+
+Your generated code will have the following:
+```scala
+type Origin
+object Origin {
+
+  final case class OriginView(description: Option[String], details: Option[String])
+
+  type ViewSelection = SelectionBuilder[Origin, OriginView]
+
+  def view: ViewSelection = (description ~ details).map { case (description, details) =>
+    OriginView(description, details)
+   }
+
+  def description: SelectionBuilder[Origin, Option[String]] = Field("description", OptionOf(Scalar()))
+  def details: SelectionBuilder[Origin, Option[String]]     = Field("details", OptionOf(Scalar()))
+}
+
+type Character
+object Character {
+
+  final case class CharacterView[OriginSelection](name: String, nicknames: List[String], origin: OriginSelection)
+
+  type ViewSelection[OriginSelection] = SelectionBuilder[Character, CharacterView[OriginSelection]]
+
+  def view[OriginSelection](originFilter: Option[String] = None)(
+    originSelection: SelectionBuilder[Origin, OriginSelection]
+  ): ViewSelection[OriginSelection] = (name ~ nicknames ~ origin(originFilter)(originSelection)).map {
+    case ((name, nicknames), origin) => CharacterView(name, nicknames, origin)
+  }
+
+  def name: SelectionBuilder[Character, String]            = Field("name", Scalar())
+  def nicknames: SelectionBuilder[Character, List[String]] = Field("nicknames", ListOf(Scalar()))
+  def origin[A](
+    filter: Option[String] = None
+  )(innerSelection: SelectionBuilder[Origin, A]): SelectionBuilder[Character, A] =
+    Field("origin", Obj(innerSelection), arguments = List(Argument("filter", filter)))
+}
+```
+
+Then you can build a query the way you want:
+```scala
+val characterWithOriginAllFields: SelectionBuilder[Character, Character.CharacterView[Origin.View]] =
+  Character.view(None)(Origin.view)
+
+val characterWithOriginOnlyDetails: SelectionBuilder[Character, Character.CharacterView[String]] =
+  Character.view(Some("some filter"))(Origin.details)
 ```
 
 ## Request execution
@@ -133,7 +216,7 @@ import sttp.client.asynchttpclient.zio.AsyncHttpClientZioBackend
 
 AsyncHttpClientZioBackend().flatMap { implicit backend =>
   val serverUrl = uri"http://localhost:8088/api/graphql"
-  val result: Task[List[CharacterView]] = 
+  val result: Task[List[CharacterView]] =
     query.toRequest(serverUrl).send().map(_.body).absolve
   ...
 }

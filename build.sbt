@@ -1,20 +1,35 @@
 import sbtcrossproject.CrossPlugin.autoImport.{ crossProject, CrossType }
 
-val mainScala       = "2.12.10"
-val allScala        = Seq("2.13.1", mainScala)
-val http4sVersion   = "0.21.1"
-val silencerVersion = "1.6.0"
+val mainScala = "2.12.13"
+val allScala  = Seq("2.13.5", mainScala)
+
+val akkaVersion           = "2.6.14"
+val catsEffectVersion     = "2.5.0"
+val circeVersion          = "0.13.0"
+val http4sVersion         = "0.21.22"
+val magnoliaVersion       = "0.17.0"
+val mercatorVersion       = "0.2.1"
+val playVersion           = "2.8.8"
+val playJsonVersion       = "2.9.2"
+val silencerVersion       = "1.7.3"
+val sttpVersion           = "3.3.1"
+val tapirVersion          = "0.17.18"
+val zioVersion            = "1.0.7"
+val zioInteropCatsVersion = "2.4.1.0"
+val zioConfigVersion      = "1.0.4"
+val zqueryVersion         = "0.2.8"
+val zioJsonVersion        = "0.1.4"
+
 inThisBuild(
   List(
+    scalaVersion := mainScala,
+    crossScalaVersions := allScala,
     organization := "com.github.ghostdogpr",
     homepage := Some(url("https://github.com/ghostdogpr/caliban")),
     licenses := List(
       "Apache-2.0" -> url("http://www.apache.org/licenses/LICENSE-2.0")
     ),
-    parallelExecution in Test := false,
-    pgpPassphrase := sys.env.get("PGP_PASSWORD").map(_.toArray),
-    pgpPublicRing := file("/tmp/public.asc"),
-    pgpSecretRing := file("/tmp/secret.asc"),
+    Test / parallelExecution := false,
     scmInfo := Some(
       ScmInfo(
         url("https://github.com/ghostdogpr/caliban/"),
@@ -28,11 +43,10 @@ inThisBuild(
         "ghostdogpr@gmail.com",
         url("https://github.com/ghostdogpr")
       )
-    )
+    ),
+    ConsoleHelper.welcomeMessage
   )
 )
-
-ThisBuild / publishTo := sonatypePublishToBundle.value
 
 name := "caliban"
 addCommandAlias("fmt", "all scalafmtSbt scalafmt test:scalafmt")
@@ -59,23 +73,42 @@ val macroParadise: Seq[Def.Setting[_]] = Seq(
 lazy val root = project
   .in(file("."))
   .enablePlugins(ScalaJSPlugin)
-  .settings(skip in publish := true)
-  .settings(historyPath := None)
+  .settings(publish / skip := true)
+  .settings(crossScalaVersions := Nil)
   .aggregate(
+    macrosJVM,
+    macrosJS,
     coreJVM,
     coreJS,
     finch,
     http4s,
     akkaHttp,
-    catsInteropJVM,
-    catsInteropJS,
+    play,
+    catsInterop,
     monixInterop,
+    tapirInterop,
     clientJVM,
     clientJS,
-    codegen,
     derivationJVM,
-    derivationJS
+    derivationJS,
+    tools,
+    codegenSbt,
+    federation
   )
+
+lazy val macros = crossProject(JSPlatform, JVMPlatform)
+  .crossType(CrossType.Pure)
+  .in(file("macros"))
+  .settings(name := "caliban-macros")
+  .settings(commonSettings)
+  .settings(
+    libraryDependencies ++= Seq(
+      "com.propensive" %% "magnolia" % magnoliaVersion,
+      "com.propensive" %% "mercator" % mercatorVersion
+    )
+  )
+lazy val macrosJVM = macros.jvm
+lazy val macrosJS  = macros.js
 
 lazy val core = crossProject(JSPlatform, JVMPlatform)
   .crossType(CrossType.Pure)
@@ -85,56 +118,87 @@ lazy val core = crossProject(JSPlatform, JVMPlatform)
   .settings(
     testFrameworks := Seq(new TestFramework("zio.test.sbt.ZTestFramework")),
     libraryDependencies ++= Seq(
-      "com.lihaoyi"    %%% "fastparse"        % "2.2.4",
-      "com.propensive" %%% "magnolia"         % "0.12.7",
-      "com.propensive" %%% "mercator"         % "0.2.1",
-      "dev.zio"        %%% "zio"              % "1.0.0-RC17",
-      "dev.zio"        %%% "zio-streams"      % "1.0.0-RC17",
-      "dev.zio"        %%% "zio-test"         % "1.0.0-RC17" % "test",
-      "dev.zio"        %%% "zio-test-sbt"     % "1.0.0-RC17" % "test",
-      "io.circe"       %%% "circe-derivation" % "0.12.0-M7" % Optional,
+      "com.lihaoyi"       %% "fastparse"    % "2.3.2",
+      "com.propensive"    %% "magnolia"     % magnoliaVersion,
+      "com.propensive"    %% "mercator"     % mercatorVersion,
+      "dev.zio"           %% "zio"          % zioVersion,
+      "dev.zio"           %% "zio-streams"  % zioVersion,
+      "dev.zio"           %% "zio-query"    % zqueryVersion,
+      "dev.zio"           %% "zio-test"     % zioVersion      % "test",
+      "dev.zio"           %% "zio-test-sbt" % zioVersion      % "test",
+      "io.circe"          %% "circe-core"   % circeVersion    % Optional,
+      "com.typesafe.play" %% "play-json"    % playJsonVersion % Optional,
+      "dev.zio"           %% "zio-json"     % zioJsonVersion  % Optional,
       compilerPlugin("com.olegpy" %% "better-monadic-for" % "0.3.1")
     )
   )
-  .jvmSettings(
-    fork in Test := true,
-    fork in run := true
+  .dependsOn(macros)
+  .settings(
+    Test / fork := true,
+    run / fork := true
   )
+
 lazy val coreJVM = core.jvm
-lazy val coreJS = core.js.settings(
-  libraryDependencies += "io.github.cquiroz" %%% "scala-java-time" % "2.0.0-RC3" % Test
-)
-lazy val codegen = project
-  .in(file("codegen"))
-  .settings(name := "caliban-codegen")
+lazy val coreJS  = core.js
+
+lazy val tools = project
+  .in(file("tools"))
+  .settings(name := "caliban-tools")
+  .settings(commonSettings)
+  .settings(
+    testFrameworks := Seq(new TestFramework("zio.test.sbt.ZTestFramework")),
+    libraryDependencies ++= Seq(
+      "org.scalameta"                 %% "scalafmt-dynamic"              % "2.7.5",
+      "org.scalameta"                 %% "scalafmt-core"                 % "2.7.5",
+      "com.softwaremill.sttp.client3" %% "async-http-client-backend-zio" % sttpVersion,
+      "dev.zio"                       %% "zio-config"                    % zioConfigVersion,
+      "dev.zio"                       %% "zio-config-magnolia"           % zioConfigVersion,
+      "dev.zio"                       %% "zio-test"                      % zioVersion % "test",
+      "dev.zio"                       %% "zio-test-sbt"                  % zioVersion % "test"
+    )
+  )
+  .dependsOn(coreJVM, clientJVM)
+
+lazy val codegenSbt = project
+  .in(file("codegen-sbt"))
+  .settings(name := "caliban-codegen-sbt")
   .settings(commonSettings)
   .settings(
     sbtPlugin := true,
-    crossScalaVersions := Seq("2.12.10"),
+    crossScalaVersions := Seq("2.12.13"),
     testFrameworks := Seq(new TestFramework("zio.test.sbt.ZTestFramework")),
     libraryDependencies ++= Seq(
-      "org.scalameta" %% "scalafmt-dynamic" % "2.4.2",
-      "org.scalameta" %% "scalafmt-core"    % "2.4.2",
-      "dev.zio"       %% "zio-test"         % "1.0.0-RC17" % "test",
-      "dev.zio"       %% "zio-test-sbt"     % "1.0.0-RC17" % "test"
+      "dev.zio" %% "zio-test-sbt" % zioVersion % "test"
     )
   )
-  .dependsOn(coreJVM)
+  .enablePlugins(SbtPlugin)
+  .settings(
+    scriptedLaunchOpts := {
+      scriptedLaunchOpts.value ++
+        Seq("-Xmx1024M", "-Dplugin.version=" + version.value)
+    },
+    scriptedBufferLog := false,
+    scriptedDependencies := {
+      (macrosJVM / publishLocal).value
+      (coreJVM / publishLocal).value
+      (clientJVM / publishLocal).value
+      (tools / publishLocal).value
+      publishLocal.value
+    }
+  )
+  .dependsOn(tools)
 
-lazy val catsInterop = crossProject(JSPlatform, JVMPlatform)
-  .crossType(CrossType.Pure)
+lazy val catsInterop = project
   .in(file("interop/cats"))
   .settings(name := "caliban-cats")
   .settings(commonSettings)
   .settings(
     libraryDependencies ++= Seq(
-      "dev.zio"       %%% "zio-interop-cats" % "2.0.0.0-RC10",
-      "org.typelevel" %%% "cats-effect"      % "2.1.1"
+      "dev.zio"       %% "zio-interop-cats" % zioInteropCatsVersion,
+      "org.typelevel" %% "cats-effect"      % catsEffectVersion
     )
   )
-  .dependsOn(core)
-lazy val catsInteropJVM = catsInterop.jvm
-lazy val catsInteropJS  = catsInterop.js
+  .dependsOn(coreJVM)
 
 lazy val monixInterop = project
   .in(file("interop/monix"))
@@ -142,47 +206,63 @@ lazy val monixInterop = project
   .settings(commonSettings)
   .settings(
     libraryDependencies ++= Seq(
-      "dev.zio"  %% "zio-interop-reactivestreams" % "1.0.3.5-RC3",
-      "dev.zio"  %% "zio-interop-cats"            % "2.0.0.0-RC10",
-      "io.monix" %% "monix"                       % "3.1.0"
+      "dev.zio"  %% "zio-interop-reactivestreams" % "1.0.3.5-RC12",
+      "dev.zio"  %% "zio-interop-cats"            % zioInteropCatsVersion,
+      "io.monix" %% "monix"                       % "3.3.0"
+    )
+  )
+  .dependsOn(coreJVM)
+
+lazy val tapirInterop = project
+  .in(file("interop/tapir"))
+  .settings(name := "caliban-tapir")
+  .settings(commonSettings)
+  .settings(
+    testFrameworks := Seq(new TestFramework("zio.test.sbt.ZTestFramework")),
+    libraryDependencies ++= Seq(
+      "com.softwaremill.sttp.tapir"   %% "tapir-core"     % tapirVersion,
+      "dev.zio"                       %% "zio-test"       % zioVersion % "test",
+      "dev.zio"                       %% "zio-test-sbt"   % zioVersion % "test",
+      compilerPlugin(("org.typelevel" %% "kind-projector" % "0.11.3").cross(CrossVersion.full))
     )
   )
   .dependsOn(coreJVM)
 
 lazy val http4s = project
-  .in(file("http4s"))
+  .in(file("adapters/http4s"))
   .settings(name := "caliban-http4s")
   .settings(commonSettings)
   .settings(
     libraryDependencies ++= Seq(
-      "dev.zio"       %% "zio-interop-cats"    % "2.0.0.0-RC10",
-      "org.typelevel" %% "cats-effect"         % "2.1.1",
-      "org.http4s"    %% "http4s-dsl"          % http4sVersion,
-      "org.http4s"    %% "http4s-circe"        % http4sVersion,
-      "org.http4s"    %% "http4s-blaze-server" % http4sVersion,
-      "io.circe"      %% "circe-parser"        % "0.13.0",
+      "dev.zio"          %% "zio-interop-cats"    % zioInteropCatsVersion,
+      "org.typelevel"    %% "cats-effect"         % catsEffectVersion,
+      "org.http4s"       %% "http4s-dsl"          % http4sVersion,
+      "org.http4s"       %% "http4s-circe"        % http4sVersion,
+      "org.http4s"       %% "http4s-blaze-server" % http4sVersion,
+      "io.circe"         %% "circe-parser"        % circeVersion,
       compilerPlugin(
-        ("org.typelevel" %% "kind-projector" % "0.11.0")
+        ("org.typelevel" %% "kind-projector"      % "0.11.3")
           .cross(CrossVersion.full)
       ),
       compilerPlugin("com.github.ghik" % "silencer-plugin" % silencerVersion cross CrossVersion.full),
-      "com.github.ghik" % "silencer-lib" % silencerVersion % Provided cross CrossVersion.full
+      "com.github.ghik"   % "silencer-lib"        % silencerVersion % Provided cross CrossVersion.full
     )
   )
   .dependsOn(coreJVM)
 
 lazy val akkaHttp = project
-  .in(file("akka-http"))
+  .in(file("adapters/akka-http"))
   .settings(name := "caliban-akka-http")
   .settings(commonSettings)
   .settings(
     libraryDependencies ++= Seq(
-      "com.typesafe.akka" %% "akka-http"       % "10.1.11",
-      "com.typesafe.akka" %% "akka-stream"     % "2.6.3",
-      "de.heikoseeberger" %% "akka-http-circe" % "1.31.0",
-      "io.circe"          %% "circe-parser"    % "0.13.0",
+      "com.typesafe.akka" %% "akka-http"                  % "10.2.4",
+      "com.typesafe.akka" %% "akka-serialization-jackson" % akkaVersion,
+      "com.typesafe.akka" %% "akka-stream"                % akkaVersion,
+      "de.heikoseeberger" %% "akka-http-circe"            % "1.36.0" % Optional,
+      "de.heikoseeberger" %% "akka-http-play-json"        % "1.36.0" % Optional,
       compilerPlugin(
-        ("org.typelevel" %% "kind-projector" % "0.11.0")
+        ("org.typelevel"  %% "kind-projector"             % "0.11.3")
           .cross(CrossVersion.full)
       )
     )
@@ -190,21 +270,39 @@ lazy val akkaHttp = project
   .dependsOn(coreJVM)
 
 lazy val finch = project
-  .in(file("finch"))
+  .in(file("adapters/finch"))
   .settings(name := "caliban-finch")
   .settings(commonSettings)
   .settings(
-    crossScalaVersions := Seq("2.12.10"),
     libraryDependencies ++= Seq(
-      "com.github.finagle" %% "finchx-core"      % "0.31.0",
-      "com.github.finagle" %% "finchx-circe"     % "0.31.0",
-      "dev.zio"            %% "zio-interop-cats" % "2.0.0.0-RC10",
-      "org.typelevel"      %% "cats-effect"      % "2.1.1"
+      "com.github.finagle" %% "finchx-core"      % "0.32.1",
+      "com.github.finagle" %% "finchx-circe"     % "0.32.1",
+      "dev.zio"            %% "zio-interop-cats" % zioInteropCatsVersion,
+      "org.typelevel"      %% "cats-effect"      % catsEffectVersion,
+      "io.circe"           %% "circe-parser"     % circeVersion
     )
   )
   .dependsOn(coreJVM)
 
-lazy val client = crossProject(JSPlatform, JVMPlatform)
+lazy val play = project
+  .in(file("adapters/play"))
+  .settings(name := "caliban-play")
+  .settings(commonSettings)
+  .settings(
+    testFrameworks := Seq(new TestFramework("zio.test.sbt.ZTestFramework")),
+    libraryDependencies ++= Seq(
+      "com.typesafe.play"             %% "play"                          % playVersion,
+      "dev.zio"                       %% "zio-test"                      % zioVersion   % "test",
+      "dev.zio"                       %% "zio-test-sbt"                  % zioVersion   % "test",
+      "com.typesafe.play"             %% "play-akka-http-server"         % playVersion  % "test",
+      "io.circe"                      %% "circe-generic"                 % circeVersion % "test",
+      "com.softwaremill.sttp.client3" %% "async-http-client-backend-zio" % sttpVersion  % "test",
+      "com.softwaremill.sttp.client3" %% "circe"                         % sttpVersion  % "test"
+    )
+  )
+  .dependsOn(coreJVM)
+
+lazy val client    = crossProject(JSPlatform, JVMPlatform)
   .crossType(CrossType.Pure)
   .in(file("client"))
   .settings(name := "caliban-client")
@@ -212,38 +310,45 @@ lazy val client = crossProject(JSPlatform, JVMPlatform)
   .settings(
     testFrameworks := Seq(new TestFramework("zio.test.sbt.ZTestFramework")),
     libraryDependencies ++= Seq(
-      "io.circe"                     %%% "circe-derivation" % "0.12.0-M7",
-      "com.softwaremill.sttp.client" %%% "core"             % "2.0.0",
-      "com.softwaremill.sttp.client" %%% "circe"            % "2.0.0",
-      "dev.zio"                      %%% "zio-test"         % "1.0.0-RC17" % "test",
-      "dev.zio"                      %%% "zio-test-sbt"     % "1.0.0-RC17" % "test"
+      "io.circe"                      %%% "circe-core"   % circeVersion,
+      "com.softwaremill.sttp.client3" %%% "core"         % sttpVersion,
+      "com.softwaremill.sttp.client3" %%% "circe"        % sttpVersion,
+      "dev.zio"                       %%% "zio-test"     % zioVersion % "test",
+      "dev.zio"                       %%% "zio-test-sbt" % zioVersion % "test"
     )
   )
 lazy val clientJVM = client.jvm
-lazy val clientJS  = client.js
+lazy val clientJS  = client.js.settings(
+  libraryDependencies += "io.github.cquiroz" %%% "scala-java-time" % "2.2.2" % Test
+)
 
 lazy val examples = project
   .in(file("examples"))
   .settings(commonSettings)
-  .settings(skip in publish := true)
+  .settings(publish / skip := true)
   .settings(
     libraryDependencies ++= Seq(
-      "com.softwaremill.sttp.client" %% "async-http-client-backend-zio" % "2.0.0"
+      "de.heikoseeberger"             %% "akka-http-circe"               % "1.36.0",
+      "com.softwaremill.sttp.client3" %% "async-http-client-backend-zio" % sttpVersion,
+      "com.softwaremill.sttp.tapir"   %% "tapir-json-circe"              % tapirVersion,
+      "io.circe"                      %% "circe-generic"                 % circeVersion,
+      "com.typesafe.play"             %% "play-akka-http-server"         % playVersion,
+      "com.typesafe.akka"             %% "akka-actor-typed"              % akkaVersion
     )
   )
   .settings(macroParadise)
-  .dependsOn(akkaHttp, http4s, catsInteropJVM, finch, monixInterop, clientJVM, derivationJVM)
+  .dependsOn(akkaHttp, http4s, catsInterop, finch, play, monixInterop, tapirInterop, clientJVM, federation, derivationJVM)
 
 lazy val benchmarks = project
   .in(file("benchmarks"))
   .settings(commonSettings)
-  .settings(skip in publish := true)
+  .settings(publish / skip := true)
   .dependsOn(coreJVM)
   .enablePlugins(JmhPlugin)
   .settings(
     libraryDependencies ++= Seq(
-      "org.sangria-graphql" %% "sangria"       % "1.4.2",
-      "org.sangria-graphql" %% "sangria-circe" % "1.2.1"
+      "org.sangria-graphql" %% "sangria"       % "2.0.0",
+      "org.sangria-graphql" %% "sangria-circe" % "1.3.0"
     )
   )
 
@@ -259,12 +364,33 @@ lazy val derivation = crossProject(JSPlatform, JVMPlatform)
   )
   .settings(macroParadise)
   .dependsOn(core)
+
 lazy val derivationJVM = derivation.jvm
 lazy val derivationJS  = derivation.js
 
+lazy val federation = project
+  .in(file("federation"))
+  .settings(name := "caliban-federation")
+  .settings(commonSettings)
+  .dependsOn(coreJVM % "compile->compile;test->test")
+  .settings(
+    testFrameworks := Seq(new TestFramework("zio.test.sbt.ZTestFramework")),
+    libraryDependencies ++= Seq(
+      "dev.zio" %% "zio"          % zioVersion,
+      "dev.zio" %% "zio-test"     % zioVersion % Test,
+      "dev.zio" %% "zio-test-sbt" % zioVersion % Test,
+      compilerPlugin("com.olegpy" %% "better-monadic-for" % "0.3.1")
+    ),
+    Compile / PB.targets := Seq(
+      scalapb.gen(grpc = false) -> (Compile / sourceManaged).value / "scalapb"
+    ),
+    libraryDependencies ++= Seq(
+      "com.thesamet.scalapb" %% "scalapb-runtime" % scalapb.compiler.Version.scalapbVersion % "protobuf"
+    ),
+    scalacOptions += "-Ywarn-unused:-locals"
+  )
+
 val commonSettings = Def.settings(
-  scalaVersion := mainScala,
-  crossScalaVersions := allScala,
   scalacOptions ++= Seq(
     "-deprecation",
     "-encoding",
@@ -289,12 +415,17 @@ val commonSettings = Def.settings(
         "-Ywarn-extra-implicit",
         "-Ywarn-inaccessible",
         "-Ywarn-infer-any",
+        "-Ywarn-unused:-nowarn",
         "-Ywarn-nullary-override",
         "-Ywarn-nullary-unit",
         "-opt-inline-from:<source>",
         "-opt-warnings",
         "-opt:l:inline"
       )
-    case _ => Nil
+    case Some((2, 13)) =>
+      Seq(
+        "-Xlint:-byname-implicit"
+      )
+    case _             => Nil
   })
 )

@@ -28,6 +28,10 @@ module.exports = {
             link: '/resources/'
           },
           {
+            text: 'FAQ',
+            link: '/faq/'
+          },
+          {
             text: 'About',
             link: '/about/'
           },
@@ -54,7 +58,9 @@ module.exports = {
               'introspection',
               'interop',
               'client',
-              'examples'
+              'federation',
+              'tools',
+              'examples',
             ]
           }]
         }
