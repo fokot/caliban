@@ -126,13 +126,13 @@ trait CalibanUtils extends MacroUtils {
 
   protected def mkCalibanType(schema: Tree, isInput: Boolean): Tree = {
     val isInputTree = mkConst(isInput)
-
+    //FIXME pass to toType_ if it is subscription or not
     q"""
       () =>
         if ($schema.optional)
-          $schema.toType($isInputTree)
+          $schema.toType_($isInputTree)
         else
-          ${refs.makeNonNull}($schema.toType($isInputTree))
+          ${refs.makeNonNull}($schema.toType_($isInputTree))
     """
   }
 }
